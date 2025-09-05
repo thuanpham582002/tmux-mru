@@ -151,7 +151,7 @@ EOF
     # Create header based on vim mode
     local header
     if [ "$VIM_MODE" = "on" ]; then
-        header="🔄 Recent Windows (j/k: navigate, l: select, 1-9: direct, /: search, q: quit)"
+        header="🔄 Recent Windows (Ctrl+J/K: navigate, Ctrl+L: select, 1-9: direct, /: search, Ctrl+Q: quit)"
     else
         header="🔄 Recent Windows (↑/↓: navigate, 1-9: direct, Esc: cancel)"
     fi
@@ -165,14 +165,14 @@ EOF
                 --header="$header" \
                 --preview="$preview_script {}" \
                 --preview-window="right:50%:wrap" \
-                --bind=j:down \
-                --bind=k:up \
-                --bind=l:accept \
+                --bind=ctrl-j:down \
+                --bind=ctrl-k:up \
+                --bind=ctrl-l:accept \
                 --bind=home:first \
                 --bind=end:last \
                 --bind=ctrl-d:half-page-down \
                 --bind=ctrl-u:half-page-up \
-                --bind=q:abort \
+                --bind=ctrl-q:abort \
                 --bind=/:jump \
                 --bind=1:pos\(1\)+accept \
                 --bind=2:pos\(2\)+accept \
