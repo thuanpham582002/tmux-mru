@@ -136,10 +136,15 @@ show_popup() {
     cat > "$preview_script" << 'EOF'
 #!/bin/bash
 input="$1"
-session_window=$(echo "$input" | sed 's/^[0-9]*\. \([^:]*:[0-9]*\) .*/\1/')
+# Parse new format: "window:name"
+window=$(echo "$input" | cut -d: -f1)
+name=$(echo "$input" | cut -d: -f2)
+
+# Find session that contains this window with matching name
+session_window=$(tmux list-windows -a -F "#{session_name}:#{window_index}:#{window_name}" | \
+    grep ":$window:$name$" | head -1)
 session=$(echo "$session_window" | cut -d: -f1)
-window=$(echo "$session_window" | cut -d: -f2)
-name=$(echo "$input" | sed 's/^[0-9]*\. [^:]*:[0-9]* - //')
+
 SCRIPTS_DIR="$MRU_SCRIPTS_DIR"
 "$SCRIPTS_DIR/mru-preview" "$session" "$window" "$name"
 EOF
