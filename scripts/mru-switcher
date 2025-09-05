@@ -138,15 +138,35 @@ show_popup() {
 input="$1"
 # Parse new format: "window:name"
 window=$(echo "$input" | cut -d: -f1)
-name=$(echo "$input" | cut -d: -f2)
+historical_name=$(echo "$input" | cut -d: -f2)
 
-# Find session that contains this window with matching name
+# Strategy 1: Find session with exact window index and name match
 session_window=$(tmux list-windows -a -F "#{session_name}:#{window_index}:#{window_name}" | \
-    grep ":$window:$name$" | head -1)
-session=$(echo "$session_window" | cut -d: -f1)
+    grep ":$window:$historical_name$" | head -1)
+
+if [ -n "$session_window" ]; then
+    # Exact match found
+    session=$(echo "$session_window" | cut -d: -f1)
+    current_name="$historical_name"
+else
+    # Strategy 2: Fallback - find by window index only (name may have changed)
+    session_window=$(tmux list-windows -a -F "#{session_name}:#{window_index}:#{window_name}" | \
+        grep ":$window:" | head -1)
+    
+    if [ -n "$session_window" ]; then
+        session=$(echo "$session_window" | cut -d: -f1)
+        current_name=$(echo "$session_window" | cut -d: -f3)
+        echo "Note: Window name changed from '$historical_name' to '$current_name'"
+        echo "────────────────────────"
+    else
+        echo "Error: Window $window not found in any session"
+        echo "This window may have been closed or moved"
+        exit 1
+    fi
+fi
 
 SCRIPTS_DIR="$MRU_SCRIPTS_DIR"
-"$SCRIPTS_DIR/mru-preview" "$session" "$window" "$name"
+"$SCRIPTS_DIR/mru-preview" "$session" "$window" "$current_name"
 EOF
     chmod +x "$preview_script"
     
