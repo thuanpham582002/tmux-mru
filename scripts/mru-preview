@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# MRU Preview - Generate window content preview for tmux-mru plugin
+
+# Get environment variables
+PREVIEW_LINES="${MRU_PREVIEW_LINES:-5}"
+
+# Function to generate preview for a window
+generate_preview() {
+    local session_name="$1"
+    local window_index="$2"
+    local window_name="$3"
+    
+    if [ -z "$session_name" ] || [ -z "$window_index" ]; then
+        echo "Error: Missing session or window information"
+        return 1
+    fi
+    
+    # Check if session and window exist
+    if ! tmux has-session -t "$session_name" 2>/dev/null; then
+        echo "Session '$session_name' not found"
+        return 1
+    fi
+    
+    if ! tmux list-windows -t "$session_name" -F "#{window_index}" | grep -q "^$window_index$"; then
+        echo "Window '$window_index' not found in session '$session_name'"
+        return 1
+    fi
+    
+    # Get window info
+    local pane_id=$(tmux list-panes -t "$session_name:$window_index" -F "#{pane_id}" | head -1)
+    local current_path=$(tmux display-message -t "$session_name:$window_index" -p "#{pane_current_path}" 2>/dev/null || echo "")
+    local current_command=$(tmux display-message -t "$session_name:$window_index" -p "#{pane_current_command}" 2>/dev/null || echo "")
+    
+    # Generate header
+    echo "📁 $current_path"
+    echo "⚡ $current_command"
+    echo "────────────────────────"
+    
+    # Capture pane content
+    local content=$(tmux capture-pane -t "$pane_id" -p 2>/dev/null)
+    
+    if [ -z "$content" ]; then
+        echo "Empty window or no content"
+        return 0
+    fi
+    
+    # Show last few lines of content (most recent output)
+    echo "$content" | tail -n "$PREVIEW_LINES" | while IFS= read -r line; do
+        # Truncate long lines
+        if [ ${#line} -gt 80 ]; then
+            echo "${line:0:77}..."
+        else
+            echo "$line"
+        fi
+    done
+}
+
+# Function to strip ANSI color codes (fallback)
+strip_colors() {
+    sed 's/\x1b\[[0-9;]*m//g'
+}
+
+# Main execution
+if [ $# -eq 0 ]; then
+    echo "Usage: $0 session_name:window_index:window_name"
+    echo "   or: $0 session_name window_index window_name"
+    exit 1
+fi
+
+# Parse input format
+if [ $# -eq 1 ]; then
+    # Format: session:window:name
+    IFS=':' read -r session_name window_index window_name <<< "$1"
+else
+    # Format: session window name
+    session_name="$1"
+    window_index="$2"
+    window_name="$3"
+fi
+
+# Generate preview
+generate_preview "$session_name" "$window_index" "$window_name" 2>/dev/null || {
+    echo "Failed to generate preview for $session_name:$window_index"
+    echo "Window: $window_name"
+    echo "This window might be inactive or not accessible"
+}

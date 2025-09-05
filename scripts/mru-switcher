@@ -1,0 +1,184 @@
+#!/usr/bin/env bash
+# MRU Switcher - Main interface for tmux-mru window switching
+
+# Get environment variables from tmux
+DATA_DIR="${MRU_DATA_DIR:-$HOME/.tmux/plugins/tmux-mru/data}"
+SCRIPTS_DIR="${MRU_SCRIPTS_DIR:-$(dirname "$0")}"
+POPUP_WIDTH="${MRU_POPUP_WIDTH:-70%}"
+POPUP_HEIGHT="${MRU_POPUP_HEIGHT:-50%}"
+HISTORY_FILE="$DATA_DIR/mru-history"
+
+# Check dependencies
+check_dependencies() {
+    if ! command -v fzf >/dev/null 2>&1; then
+        tmux display-message "Error: fzf not found. Please install fzf to use tmux-mru."
+        return 1
+    fi
+    
+    # Check tmux version for popup support
+    local tmux_version=$(tmux -V | cut -d' ' -f2 | tr -d 'v')
+    local major_version=$(echo "$tmux_version" | cut -d'.' -f1)
+    local minor_version=$(echo "$tmux_version" | cut -d'.' -f2)
+    
+    if [ "$major_version" -lt 3 ] || ([ "$major_version" -eq 3 ] && [ "$minor_version" -lt 2 ]); then
+        echo "fallback"
+    else
+        echo "popup"
+    fi
+}
+
+# Get current session and window info
+get_current_info() {
+    local current_session=$(tmux display-message -p '#S')
+    local current_window=$(tmux display-message -p '#I')
+    echo "$current_session:$current_window"
+}
+
+# Generate MRU list excluding current window
+generate_mru_list() {
+    local current_info=$(get_current_info)
+    
+    if [ ! -s "$HISTORY_FILE" ]; then
+        # No history, show all windows except current
+        tmux list-windows -a -F "#{session_name}:#{window_index}:#{window_name}" | \
+            grep -v "^$current_info:" | head -10
+        return
+    fi
+    
+    # Show MRU history excluding current window
+    while IFS=: read -r timestamp session window name; do
+        local session_window="$session:$window"
+        if [ "$session_window" != "$current_info" ]; then
+            # Verify window still exists
+            if tmux list-windows -a -F "#{session_name}:#{window_index}" | grep -q "^$session_window$"; then
+                echo "$session:$window:$name"
+            fi
+        fi
+    done < "$HISTORY_FILE"
+}
+
+# Format window list for display
+format_for_display() {
+    local counter=1
+    while IFS=: read -r session window name; do
+        printf "%d. %s:%s - %s\n" "$counter" "$session" "$window" "$name"
+        counter=$((counter + 1))
+    done
+}
+
+# Switch to selected window
+switch_to_window() {
+    local selection="$1"
+    
+    if [ -z "$selection" ]; then
+        return 1
+    fi
+    
+    # Extract session and window from selection
+    local session_window=$(echo "$selection" | sed 's/^[0-9]*\. \([^:]*:[0-9]*\) .*/\1/')
+    
+    if [ -n "$session_window" ]; then
+        tmux select-window -t "$session_window"
+        # Update MRU history
+        "$SCRIPTS_DIR/mru-tracker" update
+    fi
+}
+
+# Main popup interface
+show_popup() {
+    local mru_list=$(generate_mru_list)
+    
+    if [ -z "$mru_list" ]; then
+        tmux display-message "No other windows available"
+        return 1
+    fi
+    
+    # Create temporary script for fzf preview
+    local preview_script=$(mktemp)
+    cat > "$preview_script" << 'EOF'
+#!/bin/bash
+input="$1"
+session_window=$(echo "$input" | sed 's/^[0-9]*\. \([^:]*:[0-9]*\) .*/\1/')
+session=$(echo "$session_window" | cut -d: -f1)
+window=$(echo "$session_window" | cut -d: -f2)
+name=$(echo "$input" | sed 's/^[0-9]*\. [^:]*:[0-9]* - //')
+SCRIPTS_DIR="$MRU_SCRIPTS_DIR"
+"$SCRIPTS_DIR/mru-preview" "$session" "$window" "$name"
+EOF
+    chmod +x "$preview_script"
+    
+    # Use fzf for selection with preview
+    local selection=$(echo "$mru_list" | format_for_display | \
+        fzf --reverse \
+            --height=40% \
+            --border \
+            --header="🔄 Recent Windows (Enter: switch, Esc: cancel)" \
+            --preview="$preview_script {}" \
+            --preview-window="right:50%:wrap" \
+            --bind="1:select-all+accept" \
+            --bind="2:select-all+accept" \
+            --bind="3:select-all+accept" \
+            --bind="4:select-all+accept" \
+            --bind="5:select-all+accept" \
+            --bind="6:select-all+accept" \
+            --bind="7:select-all+accept" \
+            --bind="8:select-all+accept" \
+            --bind="9:select-all+accept")
+    
+    # Clean up temporary script
+    rm -f "$preview_script"
+    
+    if [ -n "$selection" ]; then
+        switch_to_window "$selection"
+    fi
+}
+
+# Fallback interface for older tmux versions
+show_fallback() {
+    local mru_list=$(generate_mru_list)
+    
+    if [ -z "$mru_list" ]; then
+        tmux display-message "No other windows available"
+        return 1
+    fi
+    
+    # Create menu items for tmux display-menu
+    local menu_items=""
+    local counter=1
+    
+    while IFS=: read -r session window name; do
+        if [ $counter -le 9 ]; then
+            menu_items="$menu_items \"$counter. $session:$window - $name\" \"$counter\" \"select-window -t $session:$window ; run-shell '$SCRIPTS_DIR/mru-tracker update'\""
+        fi
+        counter=$((counter + 1))
+    done <<< "$mru_list"
+    
+    if [ -n "$menu_items" ]; then
+        eval "tmux display-menu -T \"Recent Windows\" $menu_items"
+    else
+        tmux display-message "No recent windows to display"
+    fi
+}
+
+# Main execution
+main() {
+    local ui_mode=$(check_dependencies)
+    
+    if [ "$ui_mode" = "popup" ]; then
+        # Check if we can use tmux popup
+        if tmux display-popup -h 1 -w 1 echo "test" >/dev/null 2>&1; then
+            tmux display-popup -w "$POPUP_WIDTH" -h "$POPUP_HEIGHT" -E "$0 popup-content"
+        else
+            show_fallback
+        fi
+    else
+        show_fallback
+    fi
+}
+
+# Handle popup content execution
+if [ "$1" = "popup-content" ]; then
+    show_popup
+else
+    main "$@"
+fi

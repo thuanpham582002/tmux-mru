@@ -1,0 +1,28 @@
+# Data files
+data/mru-history*
+data/*.tmp
+data/*.lock
+data/*.new
+data/*.cleanup
+
+# Test artifacts
+tests/mocks/tmux
+test-*.log
+*.bats.tmp
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+tmp/

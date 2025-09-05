@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+# MRU Tracker - Tracks window access history for tmux-mru plugin
+
+# Get environment variables from tmux
+DATA_DIR="${MRU_DATA_DIR:-$HOME/.tmux/plugins/tmux-mru/data}"
+MAX_HISTORY="${MRU_MAX_HISTORY:-20}"
+HISTORY_FILE="$DATA_DIR/mru-history"
+
+# Ensure data directory exists
+mkdir -p "$DATA_DIR"
+
+# Get current window info
+get_current_window_info() {
+    local session_name=$(tmux display-message -p '#S')
+    local window_index=$(tmux display-message -p '#I')
+    local window_name=$(tmux display-message -p '#W')
+    local timestamp=$(date +%s)
+    
+    echo "$timestamp:$session_name:$window_index:$window_name"
+}
+
+# Update MRU history
+update_history() {
+    local current_info=$(get_current_window_info)
+    local session_window=$(echo "$current_info" | cut -d: -f2-3)
+    
+    # Create history file if it doesn't exist
+    touch "$HISTORY_FILE"
+    
+    # Remove existing entry for this window (if exists)
+    if [ -s "$HISTORY_FILE" ]; then
+        grep -v ":$session_window:" "$HISTORY_FILE" > "$HISTORY_FILE.tmp" 2>/dev/null || true
+        mv "$HISTORY_FILE.tmp" "$HISTORY_FILE"
+    fi
+    
+    # Add current window to top of history
+    echo "$current_info" > "$HISTORY_FILE.new"
+    if [ -s "$HISTORY_FILE" ]; then
+        cat "$HISTORY_FILE" >> "$HISTORY_FILE.new"
+    fi
+    mv "$HISTORY_FILE.new" "$HISTORY_FILE"
+    
+    # Limit history size
+    if [ -s "$HISTORY_FILE" ]; then
+        head -n "$MAX_HISTORY" "$HISTORY_FILE" > "$HISTORY_FILE.tmp"
+        mv "$HISTORY_FILE.tmp" "$HISTORY_FILE"
+    fi
+}
+
+# Clean up closed windows from history
+cleanup_history() {
+    if [ ! -s "$HISTORY_FILE" ]; then
+        return
+    fi
+    
+    # Get list of all existing windows
+    local existing_windows=$(tmux list-windows -a -F "#{session_name}:#{window_index}")
+    
+    # Filter history to keep only existing windows
+    local temp_file="$HISTORY_FILE.cleanup"
+    > "$temp_file"
+    
+    while IFS=: read -r timestamp session window name; do
+        local session_window="$session:$window"
+        if echo "$existing_windows" | grep -q "^$session_window$"; then
+            echo "$timestamp:$session:$window:$name" >> "$temp_file"
+        fi
+    done < "$HISTORY_FILE"
+    
+    mv "$temp_file" "$HISTORY_FILE"
+}
+
+# Handle file locking for concurrent access
+with_lock() {
+    local lockfile="$HISTORY_FILE.lock"
+    local timeout=5
+    local count=0
+    
+    while [ $count -lt $timeout ]; do
+        if mkdir "$lockfile" 2>/dev/null; then
+            # Got the lock
+            trap "rmdir '$lockfile' 2>/dev/null || true" EXIT
+            "$@"
+            rmdir "$lockfile" 2>/dev/null || true
+            trap - EXIT
+            return
+        fi
+        sleep 0.1
+        count=$((count + 1))
+    done
+    
+    # Fallback: proceed without lock if timeout
+    "$@"
+}
+
+# Main command handling
+case "${1:-update}" in
+    "update")
+        with_lock update_history
+        ;;
+    "cleanup")
+        with_lock cleanup_history
+        ;;
+    "list")
+        if [ -s "$HISTORY_FILE" ]; then
+            cat "$HISTORY_FILE"
+        fi
+        ;;
+    *)
+        echo "Usage: $0 {update|cleanup|list}"
+        exit 1
+        ;;
+esac
