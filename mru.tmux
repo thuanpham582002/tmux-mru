@@ -14,6 +14,7 @@ default_popup_width="70%"
 default_popup_height="50%"
 default_max_history="20"
 default_preview_lines="5"
+default_vim_mode="off"
 
 # Get user configurations
 get_tmux_option() {
@@ -33,6 +34,7 @@ popup_width=$(get_tmux_option "@mru-popup-width" "$default_popup_width")
 popup_height=$(get_tmux_option "@mru-popup-height" "$default_popup_height")
 max_history=$(get_tmux_option "@mru-max-history" "$default_max_history")
 preview_lines=$(get_tmux_option "@mru-preview-lines" "$default_preview_lines")
+vim_mode=$(get_tmux_option "@mru-vim-mode" "$default_vim_mode")
 
 # Create data directory if it doesn't exist
 mkdir -p "$DATA_DIR"
@@ -52,3 +54,4 @@ tmux set-environment -g MRU_POPUP_WIDTH "$popup_width"
 tmux set-environment -g MRU_POPUP_HEIGHT "$popup_height"
 tmux set-environment -g MRU_MAX_HISTORY "$max_history"
 tmux set-environment -g MRU_PREVIEW_LINES "$preview_lines"
+tmux set-environment -g MRU_VIM_MODE "$vim_mode"

@@ -6,6 +6,7 @@ DATA_DIR="${MRU_DATA_DIR:-$HOME/.tmux/plugins/tmux-mru/data}"
 SCRIPTS_DIR="${MRU_SCRIPTS_DIR:-$(dirname "$0")}"
 POPUP_WIDTH="${MRU_POPUP_WIDTH:-70%}"
 POPUP_HEIGHT="${MRU_POPUP_HEIGHT:-50%}"
+VIM_MODE="${MRU_VIM_MODE:-off}"
 HISTORY_FILE="$DATA_DIR/mru-history"
 
 # Check dependencies
@@ -64,6 +65,40 @@ format_for_display() {
     done
 }
 
+# Generate key bindings based on vim mode
+generate_key_bindings() {
+    local bindings=""
+    
+    if [ "$VIM_MODE" = "on" ]; then
+        # Vim-style key bindings
+        bindings="$bindings --bind=j:down"
+        bindings="$bindings --bind=k:up" 
+        bindings="$bindings --bind=home:first"
+        bindings="$bindings --bind=end:last"
+        bindings="$bindings --bind=ctrl-d:half-page-down"
+        bindings="$bindings --bind=ctrl-u:half-page-up"
+        bindings="$bindings --bind=q:abort"
+        bindings="$bindings --bind=/:jump"
+        
+        # Direct window access with number prefixes (1-9)
+        # Note: Using single key for simplicity, vim :1 :2 syntax is complex for fzf
+        # Users can still press 1, 2, 3 directly for position access
+    fi
+    
+    # Standard number key bindings (works in both modes)
+    bindings="$bindings --bind=1:pos(1)+accept"
+    bindings="$bindings --bind=2:pos(2)+accept" 
+    bindings="$bindings --bind=3:pos(3)+accept"
+    bindings="$bindings --bind=4:pos(4)+accept"
+    bindings="$bindings --bind=5:pos(5)+accept"
+    bindings="$bindings --bind=6:pos(6)+accept"
+    bindings="$bindings --bind=7:pos(7)+accept"
+    bindings="$bindings --bind=8:pos(8)+accept"
+    bindings="$bindings --bind=9:pos(9)+accept"
+    
+    echo "$bindings"
+}
+
 # Switch to selected window
 switch_to_window() {
     local selection="$1"
@@ -110,23 +145,62 @@ SCRIPTS_DIR="$MRU_SCRIPTS_DIR"
 EOF
     chmod +x "$preview_script"
     
-    # Use fzf for selection with preview
-    local selection=$(echo "$mru_list" | format_for_display | \
-        fzf --reverse \
-            --height=40% \
-            --border \
-            --header="🔄 Recent Windows (Enter: switch, Esc: cancel)" \
-            --preview="$preview_script {}" \
-            --preview-window="right:50%:wrap" \
-            --bind="1:select-all+accept" \
-            --bind="2:select-all+accept" \
-            --bind="3:select-all+accept" \
-            --bind="4:select-all+accept" \
-            --bind="5:select-all+accept" \
-            --bind="6:select-all+accept" \
-            --bind="7:select-all+accept" \
-            --bind="8:select-all+accept" \
-            --bind="9:select-all+accept")
+    # Generate key bindings based on mode
+    local key_bindings=$(generate_key_bindings)
+    
+    # Create header based on vim mode
+    local header
+    if [ "$VIM_MODE" = "on" ]; then
+        header="🔄 Recent Windows (j/k: navigate, l: select, 1-9: direct, /: search, q: quit)"
+    else
+        header="🔄 Recent Windows (↑/↓: navigate, 1-9: direct, Esc: cancel)"
+    fi
+    
+    # Use fzf for selection with preview and dynamic bindings
+    if [ "$VIM_MODE" = "on" ]; then
+        local selection=$(echo "$mru_list" | format_for_display | \
+            fzf --reverse \
+                --height=40% \
+                --border \
+                --header="$header" \
+                --preview="$preview_script {}" \
+                --preview-window="right:50%:wrap" \
+                --bind=j:down \
+                --bind=k:up \
+                --bind=l:accept \
+                --bind=home:first \
+                --bind=end:last \
+                --bind=ctrl-d:half-page-down \
+                --bind=ctrl-u:half-page-up \
+                --bind=q:abort \
+                --bind=/:jump \
+                --bind=1:pos\(1\)+accept \
+                --bind=2:pos\(2\)+accept \
+                --bind=3:pos\(3\)+accept \
+                --bind=4:pos\(4\)+accept \
+                --bind=5:pos\(5\)+accept \
+                --bind=6:pos\(6\)+accept \
+                --bind=7:pos\(7\)+accept \
+                --bind=8:pos\(8\)+accept \
+                --bind=9:pos\(9\)+accept)
+    else
+        local selection=$(echo "$mru_list" | format_for_display | \
+            fzf --reverse \
+                --height=40% \
+                --border \
+                --header="$header" \
+                --preview="$preview_script {}" \
+                --preview-window="right:50%:wrap" \
+                --bind=1:pos\(1\)+accept \
+                --bind=2:pos\(2\)+accept \
+                --bind=3:pos\(3\)+accept \
+                --bind=4:pos\(4\)+accept \
+                --bind=5:pos\(5\)+accept \
+                --bind=6:pos\(6\)+accept \
+                --bind=7:pos\(7\)+accept \
+                --bind=8:pos\(8\)+accept \
+                --bind=9:pos\(9\)+accept)
+    fi
     
     # Clean up temporary script
     rm -f "$preview_script"
