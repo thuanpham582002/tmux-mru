@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# MRU Tracker - Tracks window access history for tmux-mru plugin
+# MRU Tracker - Tracks window and session access history for tmux-mru plugin
 
 # Get environment variables from tmux
 DATA_DIR="${MRU_DATA_DIR:-$HOME/.tmux/plugins/tmux-mru/data}"
 MAX_HISTORY="${MRU_MAX_HISTORY:-20}"
-HISTORY_FILE="$DATA_DIR/mru-history"
+WINDOW_HISTORY_FILE="$DATA_DIR/mru-history"
+SESSION_HISTORY_FILE="$DATA_DIR/mru-session-history"
 
 # Ensure data directory exists
 mkdir -p "$DATA_DIR"
@@ -19,37 +20,75 @@ get_current_window_info() {
     echo "$timestamp:$session_name:$window_index:$window_name"
 }
 
+# Get current session info
+get_current_session_info() {
+    local session_name=$(tmux display-message -p '#S')
+    local window_count=$(tmux list-windows -t "$session_name" | wc -l | tr -d ' ')
+    local active_window=$(tmux display-message -p '#I:#W')
+    local timestamp=$(date +%s)
+    
+    echo "$timestamp:$session_name:$window_count:$active_window"
+}
+
 # Update MRU history
 update_history() {
     local current_info=$(get_current_window_info)
     local session_window=$(echo "$current_info" | cut -d: -f2-3)
     
     # Create history file if it doesn't exist
-    touch "$HISTORY_FILE"
+    touch "$WINDOW_HISTORY_FILE"
     
     # Remove existing entry for this window (if exists)
-    if [ -s "$HISTORY_FILE" ]; then
-        grep -v ":$session_window:" "$HISTORY_FILE" > "$HISTORY_FILE.tmp" 2>/dev/null || true
-        mv "$HISTORY_FILE.tmp" "$HISTORY_FILE"
+    if [ -s "$WINDOW_HISTORY_FILE" ]; then
+        grep -v ":$session_window:" "$WINDOW_HISTORY_FILE" > "$WINDOW_HISTORY_FILE.tmp" 2>/dev/null || true
+        mv "$WINDOW_HISTORY_FILE.tmp" "$WINDOW_HISTORY_FILE"
     fi
     
     # Add current window to top of history
-    echo "$current_info" > "$HISTORY_FILE.new"
-    if [ -s "$HISTORY_FILE" ]; then
-        cat "$HISTORY_FILE" >> "$HISTORY_FILE.new"
+    echo "$current_info" > "$WINDOW_HISTORY_FILE.new"
+    if [ -s "$WINDOW_HISTORY_FILE" ]; then
+        cat "$WINDOW_HISTORY_FILE" >> "$WINDOW_HISTORY_FILE.new"
     fi
-    mv "$HISTORY_FILE.new" "$HISTORY_FILE"
+    mv "$WINDOW_HISTORY_FILE.new" "$WINDOW_HISTORY_FILE"
     
     # Limit history size
-    if [ -s "$HISTORY_FILE" ]; then
-        head -n "$MAX_HISTORY" "$HISTORY_FILE" > "$HISTORY_FILE.tmp"
-        mv "$HISTORY_FILE.tmp" "$HISTORY_FILE"
+    if [ -s "$WINDOW_HISTORY_FILE" ]; then
+        head -n "$MAX_HISTORY" "$WINDOW_HISTORY_FILE" > "$WINDOW_HISTORY_FILE.tmp"
+        mv "$WINDOW_HISTORY_FILE.tmp" "$WINDOW_HISTORY_FILE"
+    fi
+}
+
+# Update session MRU history
+update_session_history() {
+    local current_info=$(get_current_session_info)
+    local session_name=$(echo "$current_info" | cut -d: -f2)
+    
+    # Create history file if it doesn't exist
+    touch "$SESSION_HISTORY_FILE"
+    
+    # Remove existing entry for this session (if exists)
+    if [ -s "$SESSION_HISTORY_FILE" ]; then
+        grep -v ":$session_name:" "$SESSION_HISTORY_FILE" > "$SESSION_HISTORY_FILE.tmp" 2>/dev/null || true
+        mv "$SESSION_HISTORY_FILE.tmp" "$SESSION_HISTORY_FILE"
+    fi
+    
+    # Add current session to top of history
+    echo "$current_info" > "$SESSION_HISTORY_FILE.new"
+    if [ -s "$SESSION_HISTORY_FILE" ]; then
+        cat "$SESSION_HISTORY_FILE" >> "$SESSION_HISTORY_FILE.new"
+    fi
+    mv "$SESSION_HISTORY_FILE.new" "$SESSION_HISTORY_FILE"
+    
+    # Limit history size
+    if [ -s "$SESSION_HISTORY_FILE" ]; then
+        head -n "$MAX_HISTORY" "$SESSION_HISTORY_FILE" > "$SESSION_HISTORY_FILE.tmp"
+        mv "$SESSION_HISTORY_FILE.tmp" "$SESSION_HISTORY_FILE"
     fi
 }
 
 # Clean up closed windows from history
-cleanup_history() {
-    if [ ! -s "$HISTORY_FILE" ]; then
+cleanup_window_history() {
+    if [ ! -s "$WINDOW_HISTORY_FILE" ]; then
         return
     fi
     
@@ -57,7 +96,7 @@ cleanup_history() {
     local existing_windows=$(tmux list-windows -a -F "#{session_name}:#{window_index}")
     
     # Filter history to keep only existing windows
-    local temp_file="$HISTORY_FILE.cleanup"
+    local temp_file="$WINDOW_HISTORY_FILE.cleanup"
     > "$temp_file"
     
     while IFS=: read -r timestamp session window name; do
@@ -65,16 +104,39 @@ cleanup_history() {
         if echo "$existing_windows" | grep -q "^$session_window$"; then
             echo "$timestamp:$session:$window:$name" >> "$temp_file"
         fi
-    done < "$HISTORY_FILE"
+    done < "$WINDOW_HISTORY_FILE"
     
-    mv "$temp_file" "$HISTORY_FILE"
+    mv "$temp_file" "$WINDOW_HISTORY_FILE"
+}
+
+# Clean up closed sessions from history
+cleanup_session_history() {
+    if [ ! -s "$SESSION_HISTORY_FILE" ]; then
+        return
+    fi
+    
+    # Get list of all existing sessions
+    local existing_sessions=$(tmux list-sessions -F "#{session_name}" 2>/dev/null || true)
+    
+    # Filter history to keep only existing sessions
+    local temp_file="$SESSION_HISTORY_FILE.cleanup"
+    > "$temp_file"
+    
+    while IFS=: read -r timestamp session window_count active_window; do
+        if echo "$existing_sessions" | grep -q "^$session$"; then
+            echo "$timestamp:$session:$window_count:$active_window" >> "$temp_file"
+        fi
+    done < "$SESSION_HISTORY_FILE"
+    
+    mv "$temp_file" "$SESSION_HISTORY_FILE"
 }
 
 # Handle file locking for concurrent access
 with_lock() {
-    local lockfile="$HISTORY_FILE.lock"
+    local lockfile="$1.lock"
     local timeout=5
     local count=0
+    shift  # Remove lockfile from arguments
     
     while [ $count -lt $timeout ]; do
         if mkdir "$lockfile" 2>/dev/null; then
@@ -96,18 +158,29 @@ with_lock() {
 # Main command handling
 case "${1:-update}" in
     "update")
-        with_lock update_history
+        with_lock "$WINDOW_HISTORY_FILE" update_history
+        ;;
+    "update-session")
+        with_lock "$SESSION_HISTORY_FILE" update_session_history
         ;;
     "cleanup")
-        with_lock cleanup_history
+        with_lock "$WINDOW_HISTORY_FILE" cleanup_window_history
+        ;;
+    "cleanup-session")
+        with_lock "$SESSION_HISTORY_FILE" cleanup_session_history
         ;;
     "list")
-        if [ -s "$HISTORY_FILE" ]; then
-            cat "$HISTORY_FILE"
+        if [ -s "$WINDOW_HISTORY_FILE" ]; then
+            cat "$WINDOW_HISTORY_FILE"
+        fi
+        ;;
+    "list-session")
+        if [ -s "$SESSION_HISTORY_FILE" ]; then
+            cat "$SESSION_HISTORY_FILE"
         fi
         ;;
     *)
-        echo "Usage: $0 {update|cleanup|list}"
+        echo "Usage: $0 {update|update-session|cleanup|cleanup-session|list|list-session}"
         exit 1
         ;;
 esac

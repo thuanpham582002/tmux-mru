@@ -1,0 +1,224 @@
+#!/usr/bin/env bash
+# MRU Session Switcher - Session switching interface for tmux-mru plugin
+
+# Get environment variables from tmux
+DATA_DIR="${MRU_DATA_DIR:-$HOME/.tmux/plugins/tmux-mru/data}"
+SCRIPTS_DIR="${MRU_SCRIPTS_DIR:-$(dirname "$0")}"
+POPUP_WIDTH="${MRU_POPUP_WIDTH:-70%}"
+POPUP_HEIGHT="${MRU_POPUP_HEIGHT:-50%}"
+SESSION_HISTORY_FILE="$DATA_DIR/mru-session-history"
+
+# Check dependencies
+check_dependencies() {
+    if ! command -v fzf >/dev/null 2>&1; then
+        tmux display-message "Error: fzf not found. Please install fzf to use tmux-mru."
+        return 1
+    fi
+    
+    # Check tmux version for popup support
+    local tmux_version=$(tmux -V | cut -d' ' -f2 | tr -d 'v' | sed 's/[a-zA-Z].*$//')
+    local major_version=$(echo "$tmux_version" | cut -d'.' -f1)
+    local minor_version=$(echo "$tmux_version" | cut -d'.' -f2)
+    
+    if [ "$major_version" -lt 3 ] || ([ "$major_version" -eq 3 ] && [ "$minor_version" -lt 2 ]); then
+        echo "fallback"
+    else
+        echo "popup"
+    fi
+}
+
+# Get current session info
+get_current_session() {
+    tmux display-message -p '#S'
+}
+
+# Generate session preview
+generate_session_preview() {
+    local session_name="$1"
+    
+    if [ -z "$session_name" ]; then
+        echo "Error: Missing session information"
+        return 1
+    fi
+    
+    # Check if session exists
+    if ! tmux has-session -t "$session_name" 2>/dev/null; then
+        echo "Session '$session_name' not found"
+        return 1
+    fi
+    
+    # Get session info
+    local session_created=$(tmux list-sessions -F "#{session_name}:#{session_created}" | grep "^$session_name:" | cut -d: -f2)
+    local window_count=$(tmux list-windows -t "$session_name" | wc -l | tr -d ' ')
+    local active_window=$(tmux list-windows -t "$session_name" -F "#{window_active}:#{window_index}:#{window_name}" | grep "^1:" | cut -d: -f2-)
+    
+    # Format creation time
+    local created_date=""
+    if command -v date >/dev/null 2>&1 && [ -n "$session_created" ]; then
+        created_date=$(date -r "$session_created" "+%Y-%m-%d %H:%M" 2>/dev/null || echo "")
+    fi
+    
+    # Generate header
+    echo "🖥️  Session: $session_name"
+    echo "📊 $window_count windows"
+    if [ -n "$created_date" ]; then
+        echo "⏰ Created: $created_date"
+    fi
+    echo "▶️  Active: $active_window"
+    echo "────────────────────────"
+    
+    # List all windows in session
+    echo "Windows:"
+    tmux list-windows -t "$session_name" -F "#{window_index}: #{window_name}#{?window_active, (active),}" | while read -r line; do
+        echo "  $line"
+    done
+}
+
+# Generate MRU session list excluding current session
+generate_mru_session_list() {
+    local current_session=$(get_current_session)
+    
+    if [ ! -s "$SESSION_HISTORY_FILE" ]; then
+        # No history, show all sessions except current
+        tmux list-sessions -F "#{session_name}" | grep -v "^$current_session$" | head -10
+        return
+    fi
+    
+    # Show MRU history excluding current session
+    while IFS=: read -r timestamp session window_count active_window; do
+        if [ "$session" != "$current_session" ]; then
+            # Verify session still exists
+            if tmux has-session -t "$session" 2>/dev/null; then
+                echo "$session"
+            fi
+        fi
+    done < "$SESSION_HISTORY_FILE"
+}
+
+# Format session list for display
+format_session_for_display() {
+    local counter=1
+    while read -r session; do
+        local window_count=$(tmux list-windows -t "$session" 2>/dev/null | wc -l | tr -d ' ')
+        local active_window=$(tmux list-windows -t "$session" -F "#{window_active}:#{window_name}" | grep "^1:" | cut -d: -f2)
+        printf "%d. %s (%s windows) - %s\n" "$counter" "$session" "$window_count" "$active_window"
+        counter=$((counter + 1))
+    done
+}
+
+# Switch to selected session
+switch_to_session() {
+    local selection="$1"
+    
+    if [ -z "$selection" ]; then
+        return 1
+    fi
+    
+    # Extract session name from selection
+    local session_name=$(echo "$selection" | sed 's/^[0-9]*\. \([^ ]*\) .*/\1/')
+    
+    if [ -n "$session_name" ]; then
+        tmux switch-client -t "$session_name"
+        # Update MRU session history
+        "$SCRIPTS_DIR/mru-tracker" update-session
+    fi
+}
+
+# Main popup interface
+show_session_popup() {
+    local session_list=$(generate_mru_session_list)
+    
+    if [ -z "$session_list" ]; then
+        tmux display-message "No other sessions available"
+        return 1
+    fi
+    
+    # Create temporary script for fzf preview
+    local preview_script=$(mktemp)
+    cat > "$preview_script" << EOF
+#!/bin/bash
+input="\$1"
+session_name=\$(echo "\$input" | sed 's/^[0-9]*\. \\([^ ]*\\) .*/\\1/')
+SCRIPTS_DIR="$SCRIPTS_DIR"
+DATA_DIR="$DATA_DIR"
+$(declare -f generate_session_preview)
+generate_session_preview "\$session_name"
+EOF
+    chmod +x "$preview_script"
+    
+    # Use fzf for selection with preview
+    local selection=$(echo "$session_list" | format_session_for_display | \
+        fzf --reverse \
+            --height=40% \
+            --border \
+            --header="🖥️  Recent Sessions (Enter: switch, Esc: cancel)" \
+            --preview="$preview_script {}" \
+            --preview-window="right:50%:wrap" \
+            --bind="1:accept" \
+            --bind="2:accept" \
+            --bind="3:accept" \
+            --bind="4:accept" \
+            --bind="5:accept" \
+            --bind="6:accept" \
+            --bind="7:accept" \
+            --bind="8:accept" \
+            --bind="9:accept")
+    
+    # Clean up temporary script
+    rm -f "$preview_script"
+    
+    if [ -n "$selection" ]; then
+        switch_to_session "$selection"
+    fi
+}
+
+# Fallback interface for older tmux versions
+show_session_fallback() {
+    local session_list=$(generate_mru_session_list)
+    
+    if [ -z "$session_list" ]; then
+        tmux display-message "No other sessions available"
+        return 1
+    fi
+    
+    # Create menu items for tmux display-menu
+    local menu_items=""
+    local counter=1
+    
+    while read -r session; do
+        if [ $counter -le 9 ]; then
+            local window_count=$(tmux list-windows -t "$session" 2>/dev/null | wc -l | tr -d ' ')
+            menu_items="$menu_items \"$counter. $session ($window_count windows)\" \"$counter\" \"switch-client -t $session ; run-shell '$SCRIPTS_DIR/mru-tracker update-session'\""
+        fi
+        counter=$((counter + 1))
+    done <<< "$session_list"
+    
+    if [ -n "$menu_items" ]; then
+        eval "tmux display-menu -T \"Recent Sessions\" $menu_items"
+    else
+        tmux display-message "No recent sessions to display"
+    fi
+}
+
+# Main execution
+main() {
+    local ui_mode=$(check_dependencies)
+    
+    if [ "$ui_mode" = "popup" ]; then
+        # Check if we can use tmux popup
+        if tmux display-popup -h 1 -w 1 echo "test" >/dev/null 2>&1; then
+            tmux display-popup -w "$POPUP_WIDTH" -h "$POPUP_HEIGHT" -E "$0 popup-content"
+        else
+            show_session_fallback
+        fi
+    else
+        show_session_fallback
+    fi
+}
+
+# Handle popup content execution
+if [ "$1" = "popup-content" ]; then
+    show_session_popup
+else
+    main "$@"
+fi
