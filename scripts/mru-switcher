@@ -59,10 +59,8 @@ generate_mru_list() {
 
 # Format window list for display
 format_for_display() {
-    local counter=1
     while IFS=: read -r session window name; do
-        printf "%d. %s:%s - %s\n" "$counter" "$session" "$window" "$name"
-        counter=$((counter + 1))
+        printf "%s:%s\n" "$window" "$name"
     done
 }
 
@@ -74,8 +72,13 @@ switch_to_window() {
         return 1
     fi
     
-    # Extract session and window from selection
-    local session_window=$(echo "$selection" | sed 's/^[0-9]*\. \([^:]*:[0-9]*\) .*/\1/')
+    # Extract window index and name from selection (format: "window:name")
+    local window_index=$(echo "$selection" | cut -d: -f1)
+    local window_name=$(echo "$selection" | cut -d: -f2)
+    
+    # Find the session that contains this window index with matching name
+    local session_window=$(tmux list-windows -a -F "#{session_name}:#{window_index}:#{window_name}" | \
+        grep ":$window_index:$window_name$" | head -1 | cut -d: -f1-2)
     
     if [ -n "$session_window" ]; then
         tmux select-window -t "$session_window"
@@ -148,7 +151,7 @@ show_fallback() {
     
     while IFS=: read -r session window name; do
         if [ $counter -le 9 ]; then
-            menu_items="$menu_items \"$counter. $session:$window - $name\" \"$counter\" \"select-window -t $session:$window ; run-shell '$SCRIPTS_DIR/mru-tracker update'\""
+            menu_items="$menu_items \"$window:$name\" \"$counter\" \"select-window -t $session:$window ; run-shell '$SCRIPTS_DIR/mru-tracker update'\""
         fi
         counter=$((counter + 1))
     done <<< "$mru_list"
